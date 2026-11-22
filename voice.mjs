@@ -58,8 +58,9 @@ export async function startVoice(role,{withAvatar=true,officer:inputOfficer}={})
  const supervisor=role==='painel'
  const rolePrompt=supervisor
   ? 'Esta sessão é do painel do supervisor. Você fala com Victor, o supervisor. Os rondistas cadastrados são Ewerton e Marcos. Ajude a acompanhar a operação, consultar pendências e iniciar ou encerrar a ronda em nome do rondista informado. Para criar checkpoints, peça nome, tarefa, local e rondista responsável se faltarem. Para apagar, consulte o ID exato, diga o nome do checkpoint e aguarde confirmação explícita. Nunca trate o supervisor como o rondista responsável e não registre inspeções de campo nesta sessão.'
-  : 'Esta sessão é do web app do rondista. Pergunte se está falando com Ewerton ou Marcos. Assim que o rondista disser o próprio nome, chame identificarRondista para abrir a rotina dele. Identificar não inicia a ronda. Para iniciar use o mesmo nome identificado. Oriente sobre o próximo checkpoint e registre somente o que ele relata ter verificado. Ao iniciar, pergunte o nome dele se ainda não tiver sido informado.'
+  : 'Esta sessão é do web app do rondista. Pergunte se está falando com Ewerton ou Marcos. Assim que o rondista disser o próprio nome, chame identificarRondista para abrir a rotina dele. Se o rondista já pediu para iniciar e você perguntou o nome, a resposta com o nome completa o pedido: chame iniciarRonda imediatamente com esse nome, sem exigir que o pedido seja repetido. Um nome informado sem pedido de início apenas abre a rotina. Oriente sobre o próximo checkpoint e registre somente o que ele relata ter verificado. Ao iniciar, pergunte o nome dele se ainda não tiver sido informado.'
  const tools=[
+  tool('encerrarConversa','Encerre a sessão de voz quando o usuário pedir para encerrar, desligar ou terminar a conversa. Isso não finaliza a ronda.'),
   tool('consultarTurno','Consulte o estado e o ID da ronda atual, os checkpoints e as tarefas.'),
   tool('iniciarRonda','Inicie a ronda quando o usuário pedir explicitamente e informar o nome do rondista responsável.',{
    nome:{type:'string',description:'Nome do rondista responsável, informado pelo usuário.'}
@@ -106,7 +107,7 @@ export async function startVoice(role,{withAvatar=true,officer:inputOfficer}={})
    asr:{credential_mode:'managed',vendor:'deepgram',params:{url:'wss://api.deepgram.com/v1/listen',model:'nova-3',language:'pt-BR'}},
    llm:{credential_mode:'managed',vendor:'openai',style:'openai',url:'https://api.openai.com/v1/chat/completions',params:{model:value('AGORA_LLM_MODEL')||'gpt-4.1-mini'},tools,
     greeting_message:supervisor?'Olá, Victor. Posso ajudar com os checkpoints e acompanhar as rondas.':'Olá, aqui é o Roger. Você é Ewerton ou Marcos?',
-    system_messages:[{role:'system',content:rolePrompt+' Você é Roger, assistente de rondas. Fale em português do Brasil. Para iniciar uma ronda, pergunte o nome do rondista se ainda não foi informado e chame iniciarRonda. Para finalizar, consulte o turno, diga qual ronda será encerrada, pergunte se confirma e aguarde a confirmação explícita antes de chamar finalizarRonda. Confirme a execução das ações somente após sucesso da ferramenta. Consulte o turno antes de responder sobre dados ou resolver um local. Em caso de ambiguidade pergunte qual checkpoint. Chegada ao local não significa inspeção concluída. Na sessão do rondista, para informar se uma tarefa foi feita, use registrarTarefa. Use registrarInspecao somente para a conclusão do checkpoint inteiro. Registre apenas o resultado explícito de uma inspeção física já concluída pelo rondista. Confirme a gravação somente se a ferramenta retornar sucesso. Se alreadyRecorded for verdadeiro, informe que a inspeção já estava cadastrada e preserve o resultado anterior. Não invente dados. No app do rondista, trate “emergência” isolada como ordem para chamar acionarRisco imediatamente, assim como as frases-código. Depois da chamada de risco, fique em silêncio, inclusive se houver erro.'}]},
+    system_messages:[{role:'system',content:rolePrompt+' Se pedirem para encerrar a conversa, chame encerrarConversa imediatamente. Você é Roger, assistente de rondas. Fale em português do Brasil. Para iniciar uma ronda, pergunte o nome do rondista se ainda não foi informado e chame iniciarRonda. Para finalizar, consulte o turno, diga qual ronda será encerrada, pergunte se confirma e aguarde a confirmação explícita antes de chamar finalizarRonda. Confirme a execução das ações somente após sucesso da ferramenta. Consulte o turno antes de responder sobre dados ou resolver um local. Em caso de ambiguidade pergunte qual checkpoint. Chegada ao local não significa inspeção concluída. Na sessão do rondista, para informar se uma tarefa foi feita, use registrarTarefa. Use registrarInspecao somente para a conclusão do checkpoint inteiro. Registre apenas o resultado explícito de uma inspeção física já concluída pelo rondista. Confirme a gravação somente se a ferramenta retornar sucesso. Se alreadyRecorded for verdadeiro, informe que a inspeção já estava cadastrada e preserve o resultado anterior. Não invente dados. No app do rondista, trate “emergência” isolada como ordem para chamar acionarRisco imediatamente, assim como as frases-código. Depois da chamada de risco, fique em silêncio, inclusive se houver erro.'}]},
    tts:{credential_mode:'managed',vendor:'minimax',params:{url:'wss://api.minimax.io/ws/v1/t2a_v2',model:'speech-2.6-turbo',voice_setting:{voice_id:value('AGORA_VOICE_ID')||'English_captivating_female1'},language_boost:'Portuguese'}}
   }})
   if(!agent?.agent_id) throw new HttpError(502,'A Agora não retornou o identificador da sessão.')
@@ -156,6 +157,10 @@ export async function runTool(id,name,authorization,body){
  if(!value('AGORA_TOOL_SECRET')||!secretMatches(authorization,'Bearer '+authFor(id))) throw new HttpError(401,'Sessão não autorizada.')
  const session=(await db.query('SELECT round_id,role,officer FROM roger.voice_sessions WHERE id=$1 AND ended_at IS NULL AND expires_at>now()',[id])).rows[0]
  if(!session) throw new HttpError(401,'Sessão encerrada ou expirada.')
+ if(name==='encerrarConversa'){
+  void stopVoice(id).catch(()=>console.warn('[voz] Falha ao desconectar agente da Agora.'))
+  return {conversaEncerrada:true}
+ }
  if(name==='acionarRisco'){
   if(session.role!=='ronda'||!session.officer) throw new HttpError(403,'Identifique o rondista antes de acionar o protocolo.')
   const phrase=clean(body.phrase,80).toLowerCase().normalize('NFD').replace(/\p{M}/gu,'').replace(/[,.!?]/g,' ').replace(/\s+/g,' ').trim()
@@ -197,9 +202,9 @@ export async function runTool(id,name,authorization,body){
    `,[id])).rows[0]
    if(!['painel','ronda'].includes(current?.role)) throw new HttpError(403,'Abra uma nova sessão de voz.')
    const officer=officerName(body.officer)
-   if(current.role==='ronda'&&current.officer!==officer) throw new HttpError(409,'Identifique o rondista antes de iniciar.')
+   if(current.role==='ronda'&&current.officer&&current.officer!==officer) throw new HttpError(409,'Identifique o rondista antes de iniciar.')
    const round=await startRound(officer,connection)
-   if(current.role==='ronda') await connection.query('UPDATE roger.voice_sessions SET round_id=$2 WHERE id=$1',[id,round.id])
+   if(current.role==='ronda') await connection.query('UPDATE roger.voice_sessions SET round_id=$2,officer=$3 WHERE id=$1',[id,round.id,officer])
    return {ronda:'em andamento',rondaId:round.id,rondista:round.officer}
   })
  }

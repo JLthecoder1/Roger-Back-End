@@ -2,7 +2,7 @@ import express from 'express'
 import {startRiskBuzzer} from './risk-buzzer.mjs'
 import cors from 'cors'
 import {randomUUID} from 'node:crypto'
-import {db} from './db.mjs'
+import {db,transaction} from './db.mjs'
 import {activateRisk,checkpoint,clean,HttpError,officerName,recordCheck,reportTask,snapshot,startRound,finishRound,uuid} from './rounds.mjs'
 import {announceRisk,runTool,secretMatches,startVoice,stopVoice} from './voice.mjs'
 
@@ -43,7 +43,31 @@ app.get('/api/round',async(req,res)=>{
   const data=await snapshot(null,officer)
   return res.json({officer,riskAlertId:data.riskAlertId,round:data.round,checkpoints:data.checkpoints,checks:data.checks,tasks:data.tasks,latest_task_reports:data.latest_task_reports,alerts:[]})
  }
- res.json(await snapshot())
+ const data=await snapshot()
+ const {rows:photos}=await db.query('SELECT id,round_id,officer,created_at FROM roger.round_photos ORDER BY created_at DESC,id DESC LIMIT 100')
+ res.json({...data,photos})
+})
+app.post('/api/rounds/:id/photos',express.raw({type:'image/jpeg',limit:'2mb'}),async(req,res)=>{
+ if(req.role!=='ronda') throw new HttpError(403,'Registro reservado ao rondista.')
+ const roundId=uuid(req.params.id)
+ const officer=officerName(req.query.officer)
+ const image=req.body
+ if(!Buffer.isBuffer(image)||image.length<5||!image.subarray(0,3).equals(Buffer.from([0xff,0xd8,0xff]))||
+    image.at(-2)!==0xff||image.at(-1)!==0xd9) throw new HttpError(400,'Envie uma foto JPEG válida.')
+ const id=await transaction(async connection=>{
+  const round=await connection.query('SELECT id FROM roger.rounds WHERE id=$1 AND officer=$2 AND finished_at IS NULL FOR UPDATE',[roundId,officer])
+  if(!round.rowCount) throw new HttpError(409,'A ronda do rondista precisa estar em andamento.')
+  const id=randomUUID()
+  await connection.query('INSERT INTO roger.round_photos(id,round_id,officer,image) VALUES($1,$2,$3,$4)',[id,roundId,officer,image])
+  return id
+ })
+ res.status(201).json({id})
+})
+app.get('/api/round-photos/:id',async(req,res)=>{
+ panel(req)
+ const {rows}=await db.query('SELECT image FROM roger.round_photos WHERE id=$1',[uuid(req.params.id)])
+ if(!rows.length) throw new HttpError(404,'Foto não encontrada.')
+ res.json({jpeg:rows[0].image.toString('base64')})
 })
 app.post('/api/round/start',async(req,res)=>res.status(201).json(await startRound(req.body?.officer)))
 app.post('/api/round/finish',async(req,res)=>res.json(await finishRound(req.body?.id,req.role==='ronda'?officerName(req.body?.officer):null)))
@@ -82,6 +106,10 @@ app.post('/api/voice/start',async(req,res)=>res.status(201).json(await startVoic
 app.post('/api/voice/announce-risk',async(req,res)=>{
  panel(req)
  res.json(await announceRisk(req.body?.sessionId,req.body?.alertIds))
+})
+app.get('/api/voice/status/:id',async(req,res)=>{
+ const {rowCount}=await db.query('SELECT 1 FROM roger.voice_sessions WHERE id=$1 AND role=$2 AND ended_at IS NULL AND expires_at>now()',[uuid(req.params.id),req.role])
+ res.json({active:Boolean(rowCount)})
 })
 app.post('/api/voice/stop',async(req,res)=>res.json(await stopVoice(req.body?.id)))
 app.use((_req,_res,next)=>next(new HttpError(404,'Rota inexistente.')))
