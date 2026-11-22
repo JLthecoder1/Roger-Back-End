@@ -1,0 +1,1 @@
+{"name":"roger-api","private":true,"type":"module","scripts":{"start":"node --env-file-if-exists=.env server.mjs","db:migrate":"node --env-file-if-exists=.env migrate.mjs"},"dependencies":{"agora-token":"^2.0.5","cors":"^2.8.5","express":"^5.1.0","mqtt":"^5.16.1","pg":"^8.16.0"}}
