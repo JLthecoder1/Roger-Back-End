@@ -38,7 +38,7 @@ async function startSerial(path){
 const topic=process.env.ROGER_MQTT_RISK_TOPIC||'roger/v1/risk/buzzer'
 
 export function startRiskBuzzer(){
- const serialPath=process.env.ROGER_SERIAL_PORT?.trim()
+ const serialPath=(process.env.RAILWAY_ENVIRONMENT_ID?'':process.env.ROGER_SERIAL_PORT?.trim())
  if(serialPath){void startSerial(serialPath);return}
  const url=process.env.ROGER_MQTT_URL
  if(!url)return
@@ -58,7 +58,7 @@ export function startRiskBuzzer(){
 }
 
 export function signalRiskBuzzer(id){
- if(process.env.ROGER_SERIAL_PORT?.trim()){
+ if((process.env.RAILWAY_ENVIRONMENT_ID?'':process.env.ROGER_SERIAL_PORT?.trim())){
   if(!serial?.isOpen||!serialReady){
    console.warn('[risco] Bipe não enviado: ESP32 USB indisponível.')
    return

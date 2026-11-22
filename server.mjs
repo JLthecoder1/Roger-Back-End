@@ -10,6 +10,7 @@ if(!process.env.DATABASE_URL) throw new Error('Configure DATABASE_URL.')
 const panelCode=process.env.PANEL_ACCESS_CODE
 const patrolCode=process.env.PATROL_ACCESS_CODE
 if(panelCode&&panelCode===patrolCode) throw new Error('Use códigos diferentes para painel e ronda.')
+const cloudDeployment=Boolean(process.env.RAILWAY_ENVIRONMENT_ID)
 const localPort=Number(process.env.ROGER_LOCAL_PORT??4001)
 const localOrigins=new Map([
  ['http://localhost:3000','painel'],['http://127.0.0.1:3000','painel'],
@@ -25,7 +26,7 @@ app.get('/health',async(_req,res)=>{await db.query('SELECT 1');res.json({ok:true
 app.post('/api/voice/tools/:id/:name',async(req,res)=>res.json(await runTool(req.params.id,req.params.name,req.get('Authorization'),req.body??{})))
 app.use('/api',(req,_res,next)=>{
  const auth=req.get('Authorization')
- const localRole=req.socket.localPort===localPort?localOrigins.get(req.get('Origin')):null
+ const localRole=!cloudDeployment&&req.socket.localPort===localPort?localOrigins.get(req.get('Origin')):null
  req.role=localRole||(panelCode&&secretMatches(auth,'Bearer '+panelCode)?'painel':patrolCode&&secretMatches(auth,'Bearer '+patrolCode)?'ronda':null)
  next(req.role?undefined:new HttpError(401,'Código de acesso inválido.'))
 })
@@ -120,6 +121,6 @@ app.use((error,_req,res,_next)=>{
 })
 startRiskBuzzer()
 const port=Number(process.env.PORT??4000)
-if(port===localPort) throw new Error('Use portas diferentes para PORT e ROGER_LOCAL_PORT.')
+if(!cloudDeployment&&port===localPort) throw new Error('Use portas diferentes para PORT e ROGER_LOCAL_PORT.')
 app.listen(port,'0.0.0.0',()=>console.log('API ROGER ativa na porta '+port))
-app.listen(localPort,'127.0.0.1',()=>console.log('Acesso local sem código na porta '+localPort))
+if(!cloudDeployment)app.listen(localPort,'127.0.0.1',()=>console.log('Acesso local sem código na porta '+localPort))
