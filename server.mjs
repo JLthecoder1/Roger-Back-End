@@ -23,7 +23,13 @@ app.use(cors({origin:[...origins,...localOrigins.keys()]}))
 app.use(express.json({limit:'16kb'}))
 app.use('/api',(_req,res,next)=>{res.set('Cache-Control','no-store');next()})
 app.get('/health',async(_req,res)=>{await db.query('SELECT 1');res.json({ok:true})})
-app.post('/api/voice/tools/:id/:name',async(req,res)=>res.json(await runTool(req.params.id,req.params.name,req.get('Authorization'),req.body??{})))
+app.post('/api/voice/tools/:id/:name',async(req,res)=>{
+ const name=req.params.name
+ if(['consultarTurno','iniciarRonda','apagarCheckpoint','criarCheckpoint'].includes(name)){
+  res.once('finish',()=>console.info('[voz] '+name+' HTTP '+res.statusCode))
+ }
+ res.json(await runTool(req.params.id,req.params.name,req.get('Authorization'),req.body??{}))
+})
 app.use('/api',(req,_res,next)=>{
  const auth=req.get('Authorization')
  const localRole=!cloudDeployment&&req.socket.localPort===localPort?localOrigins.get(req.get('Origin')):null

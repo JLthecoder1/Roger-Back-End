@@ -57,12 +57,12 @@ export async function startVoice(role,{withAvatar=true,officer:inputOfficer}={})
  })
  const supervisor=role==='painel'
  const rolePrompt=supervisor
-  ? 'Esta sessão é do painel do supervisor. Você fala com Victor, o supervisor. Os rondistas cadastrados são Ewerton e Marcos. Ajude a acompanhar a operação, consultar pendências e iniciar ou encerrar a ronda em nome do rondista informado. Para criar checkpoints, peça nome, tarefa, local e rondista responsável se faltarem. Para apagar, consulte o ID exato, diga o nome do checkpoint e aguarde confirmação explícita. Nunca trate o supervisor como o rondista responsável e não registre inspeções de campo nesta sessão.'
+  ? 'Esta sessão é do painel do supervisor. Você fala com Victor, o supervisor. Os rondistas cadastrados são Ewerton e Marcos. Ajude a acompanhar a operação, consultar pendências e iniciar ou encerrar a ronda em nome do rondista informado. Para criar checkpoints, extraia atividade e local da frase e chame criarCheckpoint no mesmo turno. Use Docas para “nas docas”; exemplo: “crie um checkpoint para verificar vazamento nas docas” vira tarefa “Verificar vazamento”, local “Docas” e rondista “Sem atribuição”. Se Victor informar um rondista, use esse nome. Pergunte apenas pelo local ou pela atividade quando não conseguir identificá-los. Um pedido explícito de criação já autoriza criar. Confirme atividade e local depois da gravação e avise se ficou sem atribuição. Quando Victor pedir para apagar um checkpoint, chame consultarTurno. Identifique o ponto pelo nome ou pela atividade, usando local e rondista para resolver ambiguidades. Diga a atividade e o local, peça confirmação explícita e, assim que Victor confirmar, chame apagarCheckpoint com o ID interno do ponto escolhido. Só confirme a exclusão após sucesso da ferramenta. Nunca trate o supervisor como o rondista responsável e não registre inspeções de campo nesta sessão.'
   : 'Esta sessão é do web app do rondista. Pergunte se está falando com Ewerton ou Marcos. Assim que o rondista disser o próprio nome, chame identificarRondista para abrir a rotina dele. Se o rondista já pediu para iniciar e você perguntou o nome, a resposta com o nome completa o pedido: chame iniciarRonda imediatamente com esse nome, sem exigir que o pedido seja repetido. Um nome informado sem pedido de início apenas abre a rotina. Oriente sobre o próximo checkpoint e registre somente o que ele relata ter verificado. Ao iniciar, pergunte o nome dele se ainda não tiver sido informado.'
  const tools=[
   tool('encerrarConversa','Encerre a sessão de voz quando o usuário pedir para encerrar, desligar ou terminar a conversa. Isso não finaliza a ronda.'),
   tool('consultarTurno','Consulte o estado e o ID da ronda atual, os checkpoints e as tarefas.'),
-  tool('iniciarRonda','Inicie a ronda quando o usuário pedir explicitamente e informar o nome do rondista responsável.',{
+  tool('iniciarRonda','Quando o usuário pedir para iniciar a ronda e o nome do rondista estiver disponível, execute esta ferramenta imediatamente. Confirmar verbalmente depende do resultado da ferramenta.',{
    nome:{type:'string',description:'Nome do rondista responsável, informado pelo usuário.'}
   },{officer:'{{args.nome}}'}),
   tool('finalizarRonda','Finalize a ronda ativa após consultar seu ID e receber confirmação verbal explícita do usuário.',{
@@ -71,13 +71,12 @@ export async function startVoice(role,{withAvatar=true,officer:inputOfficer}={})
   },{roundId:'{{args.rondaId}}',confirmed:'{{args.confirmado}}'})
  ]
  if(supervisor) tools.push(
-  tool('criarCheckpoint','Cria um checkpoint quando o supervisor pedir explicitamente e informar nome, tarefa e local.',{
-   nome:{type:'string',description:'Nome informado pelo supervisor.'},
+  tool('criarCheckpoint','Crie imediatamente com a atividade e o local extraídos do pedido explícito do supervisor.',{
    tarefa:{type:'string',description:'Descrição da verificação a realizar.'},
    local:{type:'string',enum:mapLocations,description:'Local do checkpoint no mapa.'},
-   rondista:{type:'string',enum:officers,description:'Rondista a quem Victor atribuiu o checkpoint.'}
-  },{name:'{{args.nome}}',task:'{{args.tarefa}}',location:'{{args.local}}',assignedTo:'{{args.rondista}}'}),
-  tool('apagarCheckpoint','Remove um checkpoint da lista após identificar seu ID em consultarTurno e receber confirmação verbal explícita do supervisor.',{
+   rondista:{type:'string',enum:[...officers,'Sem atribuição'],description:'Use Sem atribuição quando Victor não indicar um rondista.'}
+  },{task:'{{args.tarefa}}',location:'{{args.local}}',assignedTo:'{{args.rondista}}'}),
+  tool('apagarCheckpoint','Execute a exclusão assim que o supervisor confirmar explicitamente o checkpoint identificado com consultarTurno. Use o ID interno retornado pela consulta.',{
    checkpointId:{type:'string',description:'ID exato retornado por consultarTurno.'},
    confirmado:{type:'boolean',description:'Verdadeiro somente após a confirmação explícita.'}
   },{id:'{{args.checkpointId}}',confirmed:'{{args.confirmado}}'})
@@ -107,7 +106,7 @@ export async function startVoice(role,{withAvatar=true,officer:inputOfficer}={})
    asr:{credential_mode:'managed',vendor:'deepgram',params:{url:'wss://api.deepgram.com/v1/listen',model:'nova-3',language:'pt-BR'}},
    llm:{credential_mode:'managed',vendor:'openai',style:'openai',url:'https://api.openai.com/v1/chat/completions',params:{model:value('AGORA_LLM_MODEL')||'gpt-4.1-mini'},tools,
     greeting_message:supervisor?'Olá, Victor. Posso ajudar com os checkpoints e acompanhar as rondas.':'Olá, aqui é o Roger. Você é Ewerton ou Marcos?',
-    system_messages:[{role:'system',content:rolePrompt+' Se pedirem para encerrar a conversa, chame encerrarConversa imediatamente. Você é Roger, assistente de rondas. Fale em português do Brasil. Para iniciar uma ronda, pergunte o nome do rondista se ainda não foi informado e chame iniciarRonda. Para finalizar, consulte o turno, diga qual ronda será encerrada, pergunte se confirma e aguarde a confirmação explícita antes de chamar finalizarRonda. Confirme a execução das ações somente após sucesso da ferramenta. Consulte o turno antes de responder sobre dados ou resolver um local. Em caso de ambiguidade pergunte qual checkpoint. Chegada ao local não significa inspeção concluída. Na sessão do rondista, para informar se uma tarefa foi feita, use registrarTarefa. Use registrarInspecao somente para a conclusão do checkpoint inteiro. Registre apenas o resultado explícito de uma inspeção física já concluída pelo rondista. Confirme a gravação somente se a ferramenta retornar sucesso. Se alreadyRecorded for verdadeiro, informe que a inspeção já estava cadastrada e preserve o resultado anterior. Não invente dados. No app do rondista, trate “emergência” isolada como ordem para chamar acionarRisco imediatamente, assim como as frases-código. Depois da chamada de risco, fique em silêncio, inclusive se houver erro.'}]},
+    system_messages:[{role:'system',content:rolePrompt+' Se pedirem para encerrar a conversa, chame encerrarConversa imediatamente. Você é Roger, assistente de rondas. Fale em português do Brasil. Para iniciar uma ronda, pergunte o nome do rondista se ainda não foi informado e chame iniciarRonda. Para finalizar, consulte o turno, diga qual ronda será encerrada, pergunte se confirma e aguarde a confirmação explícita antes de chamar finalizarRonda. Confirme a execução das ações somente após sucesso da ferramenta. IDs e UUIDs retornados pelas ferramentas são dados internos. Nunca leia, dite ou peça esses identificadores ao usuário. Ao iniciar com sucesso, diga apenas que a ronda do rondista começou. Se a ferramenta falhar, explique o erro em linguagem simples. Consulte o turno antes de responder sobre dados ou resolver um local. Em caso de ambiguidade pergunte qual checkpoint. Chegada ao local não significa inspeção concluída. Na sessão do rondista, para informar se uma tarefa foi feita, use registrarTarefa. Use registrarInspecao somente para a conclusão do checkpoint inteiro. Registre apenas o resultado explícito de uma inspeção física já concluída pelo rondista. Confirme a gravação somente se a ferramenta retornar sucesso. Se alreadyRecorded for verdadeiro, informe que a inspeção já estava cadastrada e preserve o resultado anterior. Não invente dados. No app do rondista, trate “emergência” isolada como ordem para chamar acionarRisco imediatamente, assim como as frases-código. Depois da chamada de risco, fique em silêncio, inclusive se houver erro.'}]},
    tts:{credential_mode:'managed',vendor:'minimax',params:{url:'wss://api.minimax.io/ws/v1/t2a_v2',model:'speech-2.6-turbo',voice_setting:{voice_id:value('AGORA_VOICE_ID')||'English_captivating_female1'},language_boost:'Portuguese'}}
   }})
   if(!agent?.agent_id) throw new HttpError(502,'A Agora não retornou o identificador da sessão.')
@@ -174,7 +173,10 @@ export async function runTool(id,name,authorization,body){
   if(name==='criarCheckpoint'){
    const location=clean(body.location,80)
    if(!mapLocations.includes(location)) throw new HttpError(400,'Selecione um local válido do mapa.')
-   return checkpoint('/checkpoints',{name:body.name,task:body.task,location,assignedTo:officerName(body.assignedTo),x:50,y:50})
+   const task=clean(body.task,160)
+   const assignedTo=body.assignedTo==null||body.assignedTo===''||body.assignedTo==='Sem atribuição'?null:officerName(body.assignedTo)
+   await checkpoint('/checkpoints',{name:body.name??task.slice(0,80),task,location,assignedTo,x:50,y:50})
+   return {criado:true,atividade:task,local:location,rondista:assignedTo??'Sem atribuição'}
   }
   if(body.confirmed!==true&&body.confirmed!=='true') throw new HttpError(400,'Confirme verbalmente antes de apagar o checkpoint.')
   return checkpoint('/checkpoints/delete',{id:body.id})
@@ -205,7 +207,7 @@ export async function runTool(id,name,authorization,body){
    if(current.role==='ronda'&&current.officer&&current.officer!==officer) throw new HttpError(409,'Identifique o rondista antes de iniciar.')
    const round=await startRound(officer,connection)
    if(current.role==='ronda') await connection.query('UPDATE roger.voice_sessions SET round_id=$2,officer=$3 WHERE id=$1',[id,round.id,officer])
-   return {ronda:'em andamento',rondaId:round.id,rondista:round.officer}
+   return {ronda:'em andamento',rondista:round.officer}
   })
  }
  if(name==='finalizarRonda'){
@@ -221,7 +223,7 @@ export async function runTool(id,name,authorization,body){
   if(session.role==='ronda'&&!session.officer) throw new HttpError(409,'Identifique o rondista primeiro.')
   const {round,checkpoints,checks,alerts,tasks,latest_task_reports:reports}=await snapshot(session.round_id,session.officer)
   const done=new Set(checks.map(check=>check.id))
-  return {rondaId:round?.id??null,rondista:round?.officer??null,ronda:round?.finished_at?'finalizada':round?'em andamento':'não iniciada',pontos:checkpoints.map(p=>({id:p.id,nome:p.name,local:p.location,tarefa:p.task,concluido:done.has(p.id)})),tarefas:tasks.map(t=>({id:t.id,checkpointId:t.checkpoint_id,tarefaPrincipalId:t.parent_id,titulo:t.title,feita:reports.find(r=>r.task_id===t.id)?.done??null})),alertasPendentes:alerts.filter(a=>!a.acknowledged_at).length}
+  return {rondaId:round?.id??null,rondista:round?.officer??null,ronda:round?.finished_at?'finalizada':round?'em andamento':'não iniciada',pontos:checkpoints.map(p=>({id:p.id,nome:p.name,local:p.location,tarefa:p.task,rondista:p.assigned_to,concluido:done.has(p.id)})),tarefas:tasks.map(t=>({id:t.id,checkpointId:t.checkpoint_id,tarefaPrincipalId:t.parent_id,titulo:t.title,feita:reports.find(r=>r.task_id===t.id)?.done??null})),alertasPendentes:alerts.filter(a=>!a.acknowledged_at).length}
  }
  if(session.role==='ronda'&&!session.round_id&&['registrarInspecao','registrarTarefa'].includes(name)){
   throw new HttpError(409,'Inicie uma ronda por voz antes de registrar.')
